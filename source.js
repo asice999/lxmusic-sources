@@ -3,7 +3,7 @@
  * @description 星海v3.2.13核心 + 溯音系列 + 长青IP直连，多层回退
  * @version v6.0
  * @build 2026-09-21
- * @update_url https://github.com/asice999/lxmusic-sources/raw/master/聚合音源-v6.0-融合版.js
+ * @update_url https://raw.githubusercontent.com/asice999/lxmusic-sources/master/source.js
  */
 const { EVENT_NAMES, request, on, send, env } = globalThis.lx;
 
