@@ -1,19 +1,23 @@
 /**
  * @name 长青SVIP音源(多源聚合版)
- * @description kw/tx/kg/wy 四平台多链路回退 | yinyue.haitangw.net 直链核心 | HYW+聆澜真QQ直链 | 念心+留云兜底
- * @version v1.3.0
+ * @description kw/tx/kg/wy 四平台多链路回退 | QQ官方CDN全音质(s01s) | 酷我官方直链(mobi.kuwo) | 多层兜底
+ * @version v1.4.0
  * @author asice999 (整合)
  * @homepage https://github.com/asice999/lxmusic-sources
  * @update_url https://raw.githubusercontent.com/asice999/lxmusic-sources/master/source.js
  *
  * 可用性实测 (2026-09-23)：
- *   kw: yinyue直链(4.6MB ID3) → 念心maflya → 怡红院 → 聆澜
- *   tx: 怡红院(真QQ直链) → 聆澜(真QQ直链) → yinyue直链(4.3MB ID3) → 留云
- *   kg: yinyue直链(kg_song_kw.php, 4.3MB ID3 三连测稳定) → 留云        ← 新增
- *   wy: 留云(liuyunidc, 200 ID3) → yinyue wy.php(兜底)                ← 新增
- *   mg: 已剔除 —— haitangw migu.php 全500/ID错配返回错歌, 搜索API已死, 5后端全军覆没
- * 关键修复：JSON 后端返回 URL 用 $ 作参数分隔符，经 fixUrl() 替换 = 才可播放
- * 已剔除失效源：cenguigui/netease(会员到期)、bugpk(官方外链返回百度验证码HTML)
+ *   tx: s01s(QQ官方CDN 全音质 128k/320k/SQ/PQ FLAC/OGG, 3/3稳定) → HYW → 聆澜 → yinyue直链 → 留云  ← 官源升级
+ *   kw: mobi.kuwo.cn官方(jiakong端 官源直链, 3/3稳定 多歌泛化) → yinyue直链 → mafeiya → HYW → 聆澜   ← 官源新增
+ *   kg: yinyue直链(kg_song_kw.php, 4.3MB ID3 三连测稳定) → 留云
+ *   wy: 留云(liuyunidc, 200 ID3 3/3稳定) → yinyue wy.php(兜底)
+ *   mg: 已剔除 —— 咪咕官方 listen-url v2.2 全返 870001(内部错误)、search API 全返SPA HTML已下线,
+ *       第三方5后端全军覆没, 版权id格式不可得, 确认无解
+ *
+ * 关键修复：JSON 后端返回 URL 用 $ 作参数分隔符(如 bitrate$128&format$mp3)，经 fixUrl() 替换 = 才可播放
+ * 已剔除失效源：cenguigui/netease(会员到期)、bugpk(官方外链返回百度验证码HTML)、
+ *              vkeys(song/link 账号风控)、cyapi(403)、ygking(502)、yaohud(参数禁传)、
+ *              nki(403)、apiv2/apiv3.kugou.com(SSL重置)、music.migu.cn(接口下线)
  */
 'use strict';
 
@@ -32,6 +36,22 @@ const LEVEL_MAP = {
   'flac': 'lossless', 'flac24bit': 'lossless', 'master': 'lossless',
   'hires': 'lossless', 'atmos': 'lossless'
 };
+// QQ 官方 CDN（s01s 中转，返回 isure.stream.qqmusic.qq.com 直链含 vkey）
+const S01S = 'https://tang.api.s01s.cn/music_open_api.php';
+const S01S_MAP = {
+  '128k': 'song_play_url_standard',
+  '192k': 'song_play_url_standard',
+  '320k': 'song_play_url',
+  'flac': 'song_play_url_sq',
+  'flac24bit': 'song_play_url_sq',
+  'master': 'song_play_url_sq',
+  'hires': 'song_play_url_sq',
+  'atmos': 'song_play_url_accom',
+  'atmos_plus': 'song_play_url_accom'
+};
+// 酷我官方 mobi.kuwo.cn（KuwoDES convert_url_with_sign，返回 car-er.kuwo.cn 直链）
+const KW_MOBI = 'https://mobi.kuwo.cn/mobi.s';
+const KW_UA = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4';
 const HYW = { api: 'http://103.79.184.97/api/music/url', key: 'PYPW-QFRL-3DBF-95O6' };
 const LL = { api: 'https://source.shiqianjiang.cn/api/music/url', key: 'CERU_KEY-F4A5F0A7-F612-4676-A8F2-4A13DD0FA4E5' };
 const LY = 'https://api.liuyunidc.cn/baimusic/musicurl.php';
@@ -69,7 +89,7 @@ function fixUrl(u) {
   return String(u || '').replace(/\$/g, '=');
 }
 
-// GET+Range 探测 URL 存活（lxmusic request 不一定支持 HEAD，直链多返回 405 会误杀）
+// GET+Range 探测 URL 存活（lxmusic request 未必支持 HEAD，直链多返回 405 会误杀）
 function verifyUrl(url) {
   return new Promise((resolve) => {
     request(url, {
@@ -80,8 +100,8 @@ function verifyUrl(url) {
     }, (err, resp) => {
       if (err) return resolve(false);
       const st = resp && resp.statusCode;
-      // 200/206 资源存在；416 Range 不满足也说明资源存在；405 服务器限制方法不代表资源不存在
-      // 3xx 重定向说明资源存在（lxmusic 播放器会跟随 301/302，本处 request 不跟随故需放行）
+      // 200/206 资源存在；416 Range 不满足也说明资源存在；405 方法受限不代表资源不存在
+      // 3xx 重定向说明资源存在（本处 request 不跟随，播放器会跟随 301/302）
       resolve(!!st && (st === 200 || st === 206 || st === 416 || st === 405 ||
         (st >= 300 && st <= 308 && st !== 304)));
     });
@@ -89,6 +109,29 @@ function verifyUrl(url) {
 }
 
 // ============ 后端调用 ============
+// s01s：QQ 官方 CDN 全音质直链
+async function btS01s(id, quality) {
+  const key = S01S_MAP[quality] || 'song_play_url';
+  const s = await httpReq(S01S + '?mid=' + encodeURIComponent(String(id)));
+  const j = jParse(s);
+  const u = j && j[key];
+  if (!u) throw new Error('s01s: 无 ' + key + ' 直链');
+  return fixUrl(u);
+}
+
+// 酷我官方 mobi.kuwo.cn：KuwoDES 换取官源直链
+async function btKuwoMobi(rid) {
+  const u = KW_MOBI + '?f=web&rid=' + encodeURIComponent(String(rid)) +
+    '&br=320&source=jiakong&type=convert_url_with_sign&surl=1';
+  const s = await httpReq(u, { headers: { 'User-Agent': KW_UA } });
+  const j = jParse(s);
+  const d = j && j.data;
+  if (!j || j.code !== 200 || !d) throw new Error('kuwo mobi: ' + ((j && (j.msg)) || 'no url'));
+  const u2 = d.surl || d.url;
+  if (!u2) throw new Error('kuwo mobi: no url');
+  return fixUrl(u2);
+}
+
 // yinyue.haitangw.net 直链：端点直接输出音频流，无需解析 JSON
 async function btHtStream(platform, id, quality) {
   const path = HT_PATH[platform];
@@ -156,22 +199,24 @@ function wyId(mi) {
 const ID_FN = { tx: txMid, kw: kwRid, kg: kgHash, wy: wyId };
 
 // ============ 链路 ============
-// kw: 直链优先 → mafeiya → HYW → 聆澜
-// tx: 真QQ直链(HYW/聆澜)优先 → 直链 → 留云
+// tx: 官源全音质优先 → 真QQ直链 → 直链 → 留云
+// kw: 官源直链优先 → 直链 → mafeiya → HYW → 聆澜
 // kg: 直链 → 留云
 // wy: 留云 → 直链兜底
 const CHAINS = {
-  kw: [
-    (id, q) => btHtStream('kw', id, q),
-    (id) => btMaflya('kw', id),
-    (id, q) => btHyw('kw', id, q),
-    (id, q) => btLinlan('kw', id, q)
-  ],
   tx: [
+    (id, q) => btS01s(id, q),
     (id, q) => btHyw('tx', id, q),
     (id, q) => btLinlan('tx', id, q),
     (id, q) => btHtStream('tx', id, q),
     (id) => btLiuyun('tx', id)
+  ],
+  kw: [
+    (id) => btKuwoMobi(id),
+    (id, q) => btHtStream('kw', id, q),
+    (id) => btMaflya('kw', id),
+    (id, q) => btHyw('kw', id, q),
+    (id, q) => btLinlan('kw', id, q)
   ],
   kg: [
     (id, q) => btHtStream('kg', id, q),
@@ -240,13 +285,13 @@ send(EVENT_NAMES.inited, {
   openDevTools: false,
   sources: {
     kw: {
-      name: '酷我音乐(多源聚合)',
+      name: '酷我音乐(官源直链·多源聚合)',
       type: 'music',
       actions: ['musicUrl'],
       qualitys: ['128k', '320k', 'flac']
     },
     tx: {
-      name: 'QQ音乐(真直链·多源聚合)',
+      name: 'QQ音乐(官方CDN全音质·多源聚合)',
       type: 'music',
       actions: ['musicUrl'],
       qualitys: ['128k', '320k', 'flac']
